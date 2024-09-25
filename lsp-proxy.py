@@ -8,9 +8,7 @@ import json
 import sys
 
 class Server:
-    def __init__(self, cmd, args, primary):
-        self.cmd = cmd
-        self.args = args
+    def __init__(self, primary):
         self.pending_client_server_requests = {}
         self.pending_server_client_requests = {}
         self.primary = primary
@@ -19,25 +17,98 @@ class Server:
         self.diagnostics = {}
 
     def reset_task(self):
-        self.task = asyncio.create_task(read_message(self, self.proc.stdout))
+        self.task = asyncio.create_task(read_message(self, self.get_stream_reader()))
+
+    def get_stream_reader(self):
+        raise NotImplementedError("Implement in a subclass")
+
+    def get_stream_writer(self):
+        raise NotImplementedError("Implement in a subclass")
         
-    async def start_process(self):
-        self.proc = await asyncio.create_subprocess_exec(self.cmd, *self.args,
+    async def connect(self):
+        raise NotImplementedError("Implement in a subclass")
+
+    def is_connected(self):
+        raise NotImplementedError("Implement in a subclass")
+
+    async def wait_for_completion(self):
+        raise NotImplementedError("Implement in a subclass")
+
+
+class StdioServer(Server):
+    def __init__(self, cmd, args, primary):
+        super().__init__(primary)
+        self.cmd = cmd
+        self.args = args
+
+    async def connect(self):
+        try:
+            self.proc = await asyncio.create_subprocess_exec(self.cmd, *self.args,
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE)
-        self.reset_task()
-        
-    def is_running(self):
+            return True
+        except FileNotFoundError as err:
+            log(err)
+        return False
+
+    def is_connected(self):
         return self.proc.returncode is None
 
+    async def wait_for_completion(self):
+        await self.proc.wait()
 
-# servers to start - command, arguments, is_primary
+    def get_stream_reader(self):
+        return self.proc.stdout
+
+    def get_stream_writer(self):
+        return self.proc.stdin
+
+    def get_name(self):
+        return self.cmd
+
+
+class SocketServer(Server):
+    def __init__(self, host, port, primary):
+        super().__init__(primary)
+        self.host = host
+        self.port = port
+
+    async def connect(self):
+        try:
+            self.reader, self.writer = await asyncio.open_connection(self.host, self.port)
+            return True
+        except ConnectionRefusedError as err:
+            log(err)
+        return False
+
+    def is_connected(self):
+        return not self.writer.is_closing()
+
+    async def wait_for_completion(self):
+        self.writer.close()
+        await self.writer.wait_closed()
+
+    def get_stream_reader(self):
+        return self.reader
+
+    def get_stream_writer(self):
+        return self.writer
+
+    def get_name(self):
+        return f'{self.host}:{self.port}'
+
+
 # - all messages to/from the primary server (should be just one) are sent to/from the client
 # - for non-primary servers, only initialize, shutdown, document synchronization,
 #   diagnostic and logging messages are sent
 # - diagnostics are merged from all servers, other messages are left intact
 servers = [
-    Server('jedi-language-server', [], True),
-    Server('ruff', ['server'], False),
+    # servers to start - command, arguments, is_primary
+    StdioServer('jedi-language-server', [], True),
+    StdioServer('ruff', ['server'], False),
+
+    # servers to connect over TCP: hostname, port, is_primary
+    # e.g. for externally started 'pylsp --tcp --port 8888'
+    #SocketServer('127.0.0.1', 8888, True),
 ]
 
 
@@ -167,9 +238,9 @@ async def process(srv, writer, msg, from_server, kept_methods):
                 srv.diagnostics[uri] = msg['params']['diagnostics']
                 # modify msg to contain diagnostics from all servers
                 msg['params']['diagnostics'] = get_merged_diagnostics(uri)
-            log(f'    C <-- S {method_str} <{srv.cmd}>')
+            log(f'    C <-- S {method_str} <{srv.get_name()}>')
         else:
-            log(f'    C --> S {method_str} <{srv.cmd}>')
+            log(f'    C --> S {method_str} <{srv.get_name()}>')
 
         writer.write(construct_message(msg))
         await writer.drain()
@@ -183,8 +254,8 @@ async def dispatch(msg, stdout_writer, server):
                 kept_common_requests + kept_server_client_notifications)
     else:
         for srv in servers:
-            if srv.is_running():
-                await process(srv, srv.proc.stdin, msg, from_server,
+            if srv.is_connected():
+                await process(srv, srv.get_stream_writer(), msg, from_server,
                         kept_common_requests + kept_client_server_notifications)
 
 
@@ -221,9 +292,9 @@ async def read_message(srv, stream):
         return None
 
 
-def procs_running():
+def any_connected():
     for srv in servers:
-        if srv.is_running():
+        if srv.is_connected():
             return True
     return False
 
@@ -239,13 +310,17 @@ async def main_loop():
     stdin_reader, stdout_writer = await connect_stdin_stdout()
 
     for srv in servers:
-        await srv.start_process()
+        success = await srv.connect()
+        if not success:
+            log('Failed to connect LSP server, terminating lsp-proxy')
+            sys.exit(1)
+        srv.reset_task()
 
     tasks = [x.task for x in servers]
     # the task for reading proxy's stdin is always at the end
     tasks.append(asyncio.create_task(read_message(None, stdin_reader)))
 
-    while procs_running():
+    while any_connected():
         done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
 
         for d in done:
@@ -255,13 +330,13 @@ async def main_loop():
 
         # create new tasks for "done" tasks but reuse the remaining ones
         for srv in servers:
-            if srv.is_running() and srv.proc.stdout.at_eof():
-                await srv.proc.wait()
+            if srv.is_connected() and srv.get_stream_reader().at_eof():
+                await srv.wait_for_completion()
             elif srv.task in done:
                 srv.reset_task()
 
         stdin_task = tasks[-1]
-        tasks = [srv.task for srv in servers if srv.is_running()]
+        tasks = [srv.task for srv in servers if srv.is_connected()]
 
         # add task for proxy's stdin
         if stdin_task in done:
