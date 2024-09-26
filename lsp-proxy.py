@@ -147,24 +147,15 @@ def filter_msg(method, iden, is_primary, kept_methods):
 
 
 def all_initialized():
-    for srv in servers:
-        if not srv.initialize_msg:
-            return False
-    return True
+    return all([srv.initialize_msg for srv in servers])
 
 
 def all_shutdown():
-    for srv in servers:
-        if not srv.shutdown_received:
-            return False
-    return True
+    return all([srv.shutdown_received for srv in servers])
 
 
 def get_primary():
-    for srv in servers:
-        if srv.primary:
-            return srv
-    return servers[0]
+    return next((srv for srv in servers if srv.primary), servers[0])
 
 
 def get_merged_diagnostics(uri):
@@ -293,17 +284,11 @@ async def read_message(srv, stream):
 
 
 def any_connected():
-    for srv in servers:
-        if srv.is_connected():
-            return True
-    return False
+    return any([srv.is_connected() for srv in servers])
 
 
 def get_server_for_task(task):
-    for srv in servers:
-        if srv.task == task:
-            return srv
-    return None
+    return next((srv for srv in servers if srv.task == task), None)
 
 
 async def main_loop():
