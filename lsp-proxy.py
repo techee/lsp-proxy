@@ -3,11 +3,14 @@
 # Author:  Jiri Techet, 2024
 # License: GPL v2 or later
 
+from abc import ABC, abstractmethod
 import asyncio
 import json
+import signal
 import sys
 
-class Server:
+
+class Server(ABC):
     def __init__(self, is_primary):
         self.pending_client_server_requests = {}
         self.pending_server_client_requests = {}
@@ -19,20 +22,33 @@ class Server:
     def reset_task(self):
         self.task = asyncio.create_task(read_message(self, self.get_stream_reader()))
 
-    def get_stream_reader(self):
-        raise NotImplementedError("Implement in a subclass")
-
-    def get_stream_writer(self):
-        raise NotImplementedError("Implement in a subclass")
-
+    @abstractmethod
     async def connect(self):
-        raise NotImplementedError("Implement in a subclass")
+        pass
 
+    @abstractmethod
+    def disconnect(self):
+        pass
+
+    @abstractmethod
     def is_connected(self):
-        raise NotImplementedError("Implement in a subclass")
+        pass
 
+    @abstractmethod
     async def wait_for_completion(self):
-        raise NotImplementedError("Implement in a subclass")
+        pass
+
+    @abstractmethod
+    def get_stream_reader(self):
+        pass
+
+    @abstractmethod
+    def get_stream_writer(self):
+        pass
+
+    @abstractmethod
+    def get_name(self):
+        pass
 
 
 class StdioServer(Server):
@@ -40,6 +56,7 @@ class StdioServer(Server):
         super().__init__(primary)
         self.cmd = cmd
         self.args = args
+        self.proc = None
 
     async def connect(self):
         try:
@@ -52,6 +69,10 @@ class StdioServer(Server):
 
     def is_connected(self):
         return self.proc.returncode is None
+
+    def disconnect(self):
+        if self.proc and self.is_connected():
+            self.proc.terminate()
 
     async def wait_for_completion(self):
         await self.proc.wait()
@@ -82,6 +103,10 @@ class SocketServer(Server):
 
     def is_connected(self):
         return not self.writer.is_closing()
+
+    def disconnect(self):
+        if self.writer and self.is_connected():
+            self.writer.close()
 
     async def wait_for_completion(self):
         self.writer.close()
@@ -257,7 +282,7 @@ async def read_message(srv, stream):
         # HTTP-like header separated by newline
         header = await stream.readuntil(b'\r\n\r\n')
     except asyncio.exceptions.IncompleteReadError:
-        if not srv or not srv.shutdown_received:
+        if not srv.shutdown_received and srv.is_connected() and not srv.get_stream_reader().at_eof():
             log('Invalid HTTP message, separator between header and body not found')
         return None
 
@@ -293,6 +318,11 @@ def get_server_for_task(task):
     return next((srv for srv in servers if srv.task == task), None)
 
 
+def terminate_all():
+    for srv in servers:
+        srv.disconnect()
+
+
 async def main_loop():
     stdin_reader, stdout_writer = await connect_stdin_stdout()
 
@@ -300,6 +330,7 @@ async def main_loop():
         success = await srv.connect()
         if not success:
             log('Failed to connect LSP server, terminating lsp-proxy')
+            terminate_all()
             sys.exit(1)
         srv.reset_task()
 
@@ -331,5 +362,12 @@ async def main_loop():
         else:
             tasks.append(stdin_task)
 
+
+def signal_handler(signum, frame):
+    terminate_all()
+
+
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
 
 asyncio.run(main_loop())
