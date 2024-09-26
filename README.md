@@ -4,19 +4,19 @@ lsp-proxy
 lsp-proxy is a Python script that acts as a proxy between a LSP client and
 one or more LSP servers. This gives the possibility to run multiple LSP
 servers to clients that support only a single LSP server for one programming
-language.
+language or to use socket server connection when clients support only
+stdio-based communication.
 
-More specifically:
-- the proxy declares one server as primary - primary server receives all
+Technical details:
+- the proxy declares one server as primary - the primary server receives all
   requests and notifications and all its responses are returned back to the
   client. The primary server serves as the main server for all LSP features like
   autocompletion, goto, document symbols, etc.
 - other servers receive only basic lifecycle and document synchronization
-  messages. These allow the servers send correct
+  messages. These allow the non-primary servers to send correct
   `textDocument/publishDiagnostics` notifications which are all merged and
   sent back to the client. This means that non-primary servers can serve as
-  linters and all error messages and warnings from them can be displayed by the
-  client
+  linters or error checkers
 - `initialize` and `shutdown` requests are synchronized so the request results
   are sent to the client only after all servers return a response. In addition,
   the client receives the result of `initialize` from the primary server only
@@ -26,29 +26,31 @@ Usage
 
 At the moment, there is no configuration file and child servers are configured
 directly in the script:
-```
-# servers to start - command, arguments, is_primary
+```python
 servers = [
-    Server('jedi-language-server', [], True),
-    Server('ruff', ['server'], False),
+    # servers to start - command, arguments, is_primary
+    StdioServer('jedi-language-server', [], True),
+    StdioServer('ruff', ['server'], False),
+
+    # servers to connect over TCP: hostname, port, is_primary
+    # e.g. for externally started 'pylsp --tcp --port 8888'
+    #SocketServer('127.0.0.1', 8888, True),
 ]
 ```
 Afterwards, the script can be made executable or started using
 ```
 python3 lsp-proxy.py
 ```
-and configured in your editor as the language server executable.
+and configured in your editor as the LSP server executable.
 
 Possible future improvements
 ----------------------------
-- configuration file
-- support for connecting servers using sockets. This would allow clients
-  supporting only `stdin/stdout` communication work with servers supporting
-  only socket communication
+- configuration file (probably JSON-based to easily support the next point)
+- configurable server initialization options for all the servers
 - general multiserver support where the proxy can be configured to e.g. use
   autocompletion from server 1, document symbols from server 2, goto
   from server 3. This would require merging all the server's `initialize`
-  responses into one that contain all the features from all the clients and
+  responses into one that contains all the features from all the clients and
   then dispatching the requests based on the configuration and server's
   capabilities
 
