@@ -20,6 +20,8 @@ Technical details:
 - `initialize` and `shutdown` requests are synchronized so the request results
   are sent to the client only after all servers return a response. In addition,
   the client receives the result of `initialize` from the primary server only
+- `initializationOptions` from the `initialize` request are sent only to the
+  primary server; they are removed for all other servers
 
 Usage
 -----

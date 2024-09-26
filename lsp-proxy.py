@@ -8,10 +8,10 @@ import json
 import sys
 
 class Server:
-    def __init__(self, primary):
+    def __init__(self, is_primary):
         self.pending_client_server_requests = {}
         self.pending_server_client_requests = {}
-        self.primary = primary
+        self.is_primary = is_primary
         self.initialize_msg = None
         self.shutdown_received = False
         self.diagnostics = {}
@@ -24,7 +24,7 @@ class Server:
 
     def get_stream_writer(self):
         raise NotImplementedError("Implement in a subclass")
-        
+
     async def connect(self):
         raise NotImplementedError("Implement in a subclass")
 
@@ -155,7 +155,7 @@ def all_shutdown():
 
 
 def get_primary():
-    return next((srv for srv in servers if srv.primary), servers[0])
+    return next((srv for srv in servers if srv.is_primary), servers[0])
 
 
 def get_merged_diagnostics(uri):
@@ -180,7 +180,7 @@ async def process(srv, writer, msg, from_server, kept_methods):
     should_send = False
 
     if from_server:
-        pending = srv.pending_client_server_requests 
+        pending = srv.pending_client_server_requests
     else:
         pending = srv.pending_server_client_requests
 
@@ -191,13 +191,13 @@ async def process(srv, writer, msg, from_server, kept_methods):
         # update method name based on what we previously assigned to the id
         method = pending[iden]
         del pending[iden]
-    elif not filter_msg(method, iden, srv.primary, kept_methods):
+    elif not filter_msg(method, iden, srv.is_primary, kept_methods):
         # this is a request or notification that hasn't been filtered and should
         # be sent
         should_send = True
         if method and iden:
             if from_server:
-                pending = srv.pending_server_client_requests 
+                pending = srv.pending_server_client_requests
             else:
                 pending = srv.pending_client_server_requests
             # store request id's into pending so we send them when responses arrive
@@ -218,9 +218,11 @@ async def process(srv, writer, msg, from_server, kept_methods):
     else:
         if method == 'initialize':
             initialize_id = iden
+            if not srv.is_primary and 'initializationOptions' in msg['params']:
+                msg['params']['initializationOptions'] = None
         elif method == 'shutdown':
             shutdown_id = iden
-            
+
     if should_send:
         method_str = method if method else "no method"
         if from_server:
