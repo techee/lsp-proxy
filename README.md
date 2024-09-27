@@ -53,10 +53,12 @@ The first server in the array is primary. Valid configuration options are:
 - `initializationOptions` (default `null`): the `initializationOptions` field
   of the `initialize` request that is passed to the server. This value is also
   returned when the client calls `workspace/didChangeConfiguration`. The exact
-  format of this field is server-specific - consult the documentation of your
+  format of this field is server-specific - consult the documentation of the
   server. If set to `null`, the proxy forwards the `initializationOptions`
   value from the client for the primary server and sets the value to `null` for
-  all other servers.
+  all other servers
+- `useDiagnostics` (default `True`): whether to use diagnostics (errors,
+  warnings) received using `textDocument/publishDiagnostics` from this server
 
 The script can be made executable or started using
 ```

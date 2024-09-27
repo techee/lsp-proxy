@@ -1,6 +1,11 @@
 [
 	{
-		"cmd": "jedi-language-server"
+		"cmd": "jedi-language-server",
+		"useDiagnostics": false
+	},
+	{
+		"cmd": "pyright-langserver",
+		"args": ["--stdio"]
 	},
 	{
 		"cmd": "ruff",

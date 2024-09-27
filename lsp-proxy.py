@@ -74,6 +74,7 @@ class Server(ABC):
         self.shutdown_received = False
         self.diagnostics = {}
         self.initialization_options = None
+        self.use_diagnostics = True
 
     def reset_task(self):
         self.task = asyncio.create_task(read_message(self, self.get_stream_reader()))
@@ -198,7 +199,7 @@ class Proxy:
     def get_merged_diagnostics(self, uri):
         diags = []
         for srv in self.servers:
-            if uri in srv.diagnostics:
+            if srv.use_diagnostics and uri in srv.diagnostics:
                 diags += srv.diagnostics[uri]
         return diags
 
@@ -381,6 +382,9 @@ def load_config(cfg):
 
         if 'initializationOptions' in srv_cfg:
             srv.initialization_options = srv_cfg['initializationOptions']
+
+        if 'useDiagnostics' in srv_cfg:
+            srv.use_diagnostics = srv_cfg['useDiagnostics']
 
         servers.append(srv)
         is_primary = False
