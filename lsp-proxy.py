@@ -80,44 +80,44 @@ class Server(ABC):
         self.task = asyncio.create_task(read_message(self, self.get_stream_reader()))
 
     @abstractmethod
-    async def connect(self):
-        pass
+    async def connect(self) -> bool:
+        return False
 
     @abstractmethod
     def disconnect(self):
         pass
 
     @abstractmethod
-    def is_connected(self):
-        pass
+    def is_connected(self) -> bool:
+        return False
 
     @abstractmethod
     async def wait_for_completion(self):
         pass
 
     @abstractmethod
-    def get_stream_reader(self):
-        pass
+    def get_stream_reader(self) -> asyncio.StreamReader:
+        return None
 
     @abstractmethod
-    def get_stream_writer(self):
-        pass
+    def get_stream_writer(self) -> asyncio.StreamWriter:
+        return None
 
     @abstractmethod
-    def get_name(self):
-        pass
+    def get_name(self) -> str:
+        return ""
 
 
 class StdioServer(Server):
     def __init__(self, cmd, args, primary):
         super().__init__(primary)
-        self.cmd = cmd
-        self.args = args
-        self.proc = None
+        self._cmd = cmd
+        self._args = args
+        self._proc = None
 
     async def connect(self):
         try:
-            self.proc = await asyncio.create_subprocess_exec(self.cmd, *self.args,
+            self._proc = await asyncio.create_subprocess_exec(self._cmd, *self._args,
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE)
             return True
         except FileNotFoundError as err:
@@ -125,60 +125,68 @@ class StdioServer(Server):
         return False
 
     def is_connected(self):
-        return self.proc.returncode is None
+        assert self._proc
+        return self._proc.returncode is None
 
     def disconnect(self):
-        if self.proc and self.is_connected():
-            self.proc.terminate()
+        if self._proc and self.is_connected():
+            self._proc.terminate()
 
     async def wait_for_completion(self):
-        await self.proc.wait()
+        assert self._proc
+        await self._proc.wait()
 
     def get_stream_reader(self):
-        return self.proc.stdout
+        assert self._proc and self._proc.stdout
+        return self._proc.stdout
 
     def get_stream_writer(self):
-        return self.proc.stdin
+        assert self._proc and self._proc.stdin
+        return self._proc.stdin
 
     def get_name(self):
-        return self.cmd
+        return self._cmd
 
 
 class SocketServer(Server):
     def __init__(self, host, port, primary):
         super().__init__(primary)
-        self.host = host
-        self.port = port
-        self.reader = None
-        self.writer = None
+        self._host = host
+        self._port = port
+        self._reader = None
+        self._writer = None
 
     async def connect(self):
         try:
-            self.reader, self.writer = await asyncio.open_connection(self.host, self.port)
+            self._reader, self._writer = await asyncio.open_connection(self._host, self._port)
             return True
         except ConnectionRefusedError as err:
             log(err)
         return False
 
     def is_connected(self):
-        return not self.writer.is_closing()
+        assert self._writer
+        return not self._writer.is_closing()
 
     def disconnect(self):
-        if self.writer and self.is_connected():
-            self.writer.close()
+        if self._writer and self.is_connected():
+            self._writer.close()
 
     async def wait_for_completion(self):
-        self.writer.close()
-        await self.writer.wait_closed()
+        assert self._writer
+        self._writer.close()
+        await self._writer.wait_closed()
 
     def get_stream_reader(self):
-        return self.reader
+        assert self._reader
+        return self._reader
 
     def get_stream_writer(self):
-        return self.writer
+        assert self._writer
+        return self._writer
 
     def get_name(self):
-        return f'{self.host}:{self.port}'
+        return f'{self._host}:{self._port}'
 
 
 class Proxy:
