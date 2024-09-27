@@ -26,28 +26,40 @@ Technical details:
 Usage
 -----
 
-At the moment, there is no configuration file and child servers are configured
-directly in the script:
-```python
-servers = [
-    # servers to start - command, arguments, is_primary
-    StdioServer('jedi-language-server', [], True),
-    StdioServer('ruff', ['server'], False),
-
-    # servers to connect over TCP: hostname, port, is_primary
-    # e.g. for externally started 'pylsp --tcp --port 8888'
-    #SocketServer('127.0.0.1', 8888, True),
+The server is configured using a simple JSON configuration file which is passed
+as the command-line argument of the script. A simple configuration file
+looks as follows:
+```json
+[
+    {
+        "cmd": "jedi-language-server"
+    },
+    {
+        "cmd": "ruff",
+        "args": ["server"]
+    }
 ]
 ```
-Afterwards, the script can be made executable or started using
+The first server in the array is primary. Valid configuration options are:
+- `cmd` (mandatory when `port` is not present): the executable of the server
+  to start when using stdin/stdout communication
+- `args` (default `[]`): an array of command-line arguments of `cmd`
+- `port` (mandatory when `cmd` is not present): port to connect when using
+  socket-based communication. Note that when using sockets, the proxy does
+  not start the server process and the process has to be started externally
+  (e.g. by `pylsp --tcp --port 8888`)
+- `host` (default `"127.0.0.1"`): hostname to connect when using socket-based
+  communication
+
+The script can be made executable or started using
 ```
-python3 lsp-proxy.py
+python3 lsp-proxy.py <config_file>
 ```
-and configured in your editor as the LSP server executable.
+and configured in your editor as the LSP server executable taking the
+configuration file as its argument.
 
 Possible future improvements
 ----------------------------
-- configuration file (probably JSON-based to easily support the next point)
 - configurable server initialization options for all the servers
 - general multiserver support where the proxy can be configured to e.g. use
   autocompletion from server 1, document symbols from server 2, goto

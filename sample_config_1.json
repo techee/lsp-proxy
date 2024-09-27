@@ -1,0 +1,9 @@
+[
+	{
+		"cmd": "jedi-language-server"
+	},
+	{
+		"cmd": "ruff",
+		"args": ["server"]
+	}
+]
