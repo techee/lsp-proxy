@@ -11,13 +11,21 @@ import signal
 import sys
 
 
-kept_common_requests = ['initialize', 'shutdown', 'window/workDoneProgress/create',
-    'window/workDoneProgress/cancel']
-kept_client_server_notifications = ['initialized', 'exit',
+preserved_common_requests = [
+    'initialize', 'shutdown',
+    'window/workDoneProgress/create', 'window/showMessageRequest', 'window/showDocument',
+    'workspace/configuration', 'workspace/workspaceFolders', 'workspace/applyEdit'
+]
+preserved_client_server_notifications = [
+    'initialized', 'exit',
     'textDocument/didOpen', 'textDocument/didChange', 'textDocument/didSave', 'textDocument/didClose',
-    'workspace/didChangeWorkspaceFolders', 'workspace/didChangeConfiguration']
-kept_server_client_notifications = ['textDocument/publishDiagnostics',
-    'window/showMessage', 'window/logMessage']
+    'workspace/didChangeWorkspaceFolders', 'workspace/didChangeConfiguration'
+]
+preserved_server_client_notifications = [
+    'textDocument/publishDiagnostics',
+    'window/showMessage', 'window/logMessage',
+    '$/progress'
+]
 
 
 def log(*args, **kwargs):
@@ -198,13 +206,13 @@ class Proxy:
         msg_str = json.dumps(msg).encode('utf-8')
         return b'Content-Length: ' + str(len(msg_str)).encode('utf-8') + b'\r\n\r\n' + msg_str
 
-    def filter_msg(self, method, is_primary, kept_methods):
+    def filter_msg(self, method, is_primary, preserved_methods):
         if is_primary:
             return False
 
-        return method not in kept_methods
+        return method not in preserved_methods
 
-    async def process(self, srv, writer, msg, from_server, kept_methods):
+    async def process(self, srv, writer, msg, from_server, preserved_methods):
         method = msg['method'] if 'method' in msg else None
         iden = msg['id'] if 'id' in msg else None
 
@@ -222,7 +230,7 @@ class Proxy:
             # update method name based on what we previously assigned to the id
             method = pending[iden]
             del pending[iden]
-        elif not self.filter_msg(method, srv.is_primary, kept_methods):
+        elif not self.filter_msg(method, srv.is_primary, preserved_methods):
             # this is a request or notification that hasn't been filtered and should
             # be sent
             should_send = True
@@ -281,12 +289,12 @@ class Proxy:
 
         if from_server:
             await self.process(server, stdout_writer, msg, from_server,
-                    kept_common_requests + kept_server_client_notifications)
+                    preserved_common_requests + preserved_server_client_notifications)
         else:
             for srv in self.servers:
                 if srv.is_connected():
                     await self.process(srv, srv.get_stream_writer(), msg, from_server,
-                            kept_common_requests + kept_client_server_notifications)
+                            preserved_common_requests + preserved_client_server_notifications)
 
     def any_connected(self):
         return any([srv.is_connected() for srv in self.servers])
