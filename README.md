@@ -20,8 +20,8 @@ Technical details:
 - `initialize` and `shutdown` requests are synchronized so the request results
   are sent to the client only after all servers return a response. In addition,
   the client receives the result of `initialize` from the primary server only
-- `initializationOptions` from the `initialize` request are sent only to the
-  primary server; they are removed for all other servers
+- `initializationOptions` from the `initialize` request are sent selectively -
+  see the `initializationOptions` configuration option below
 
 Usage
 -----
@@ -50,6 +50,13 @@ The first server in the array is primary. Valid configuration options are:
   (e.g. by `pylsp --tcp --port 8888`)
 - `host` (default `"127.0.0.1"`): hostname to connect when using socket-based
   communication
+- `initializationOptions` (default `null`): the `initializationOptions` field
+  of the `initialize` request that is passed to the server. This value is also
+  returned when the client calls `workspace/didChangeConfiguration`. The exact
+  format of this field is server-specific - consult the documentation of your
+  server. If set to `null`, the proxy forwards the `initializationOptions`
+  value from the client for the primary server and sets the value to `null` for
+  all other servers.
 
 The script can be made executable or started using
 ```
@@ -60,7 +67,6 @@ configuration file as its argument.
 
 Possible future improvements
 ----------------------------
-- configurable server initialization options for all the servers
 - general multiserver support where the proxy can be configured to e.g. use
   autocompletion from server 1, document symbols from server 2, goto
   from server 3. This would require merging all the server's `initialize`

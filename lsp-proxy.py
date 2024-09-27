@@ -15,7 +15,7 @@ kept_common_requests = ['initialize', 'shutdown', 'window/workDoneProgress/creat
     'window/workDoneProgress/cancel']
 kept_client_server_notifications = ['initialized', 'exit',
     'textDocument/didOpen', 'textDocument/didChange', 'textDocument/didSave', 'textDocument/didClose',
-    'workspace/didChangeWorkspaceFolders']
+    'workspace/didChangeWorkspaceFolders', 'workspace/didChangeConfiguration']
 kept_server_client_notifications = ['textDocument/publishDiagnostics',
     'window/showMessage', 'window/logMessage']
 
@@ -65,6 +65,7 @@ class Server(ABC):
         self.initialize_msg = None
         self.shutdown_received = False
         self.diagnostics = {}
+        self.initialization_options = None
 
     def reset_task(self):
         self.task = asyncio.create_task(read_message(self, self.get_stream_reader()))
@@ -248,8 +249,15 @@ class Proxy:
         else:
             if method == 'initialize':
                 self.initialize_id = iden
-                if not srv.is_primary and 'initializationOptions' in msg['params']:
+                if srv.initialization_options:
+                    msg['params']['initializationOptions'] = srv.initialization_options
+                elif not srv.is_primary:
                     msg['params']['initializationOptions'] = None
+            elif method == 'workspace/didChangeConfiguration':
+                if srv.initialization_options:
+                    msg['params']['settings'] = srv.initialization_options
+                elif not srv.is_primary:
+                    msg['params']['settings'] = None
             elif method == 'shutdown':
                 self.shutdown_id = iden
 
@@ -351,7 +359,7 @@ def load_config(cfg):
                 args = srv_cfg['args']
                 if not isinstance(args, list):
                     raise ValueError('"args" must be an array of arguments (strings)')
-            servers.append(StdioServer(srv_cfg['cmd'], args, is_primary))
+            srv = StdioServer(srv_cfg['cmd'], args, is_primary)
         elif 'port' in srv_cfg:
             port = srv_cfg['port']
             if not isinstance(port, int):
@@ -359,10 +367,14 @@ def load_config(cfg):
             host = "127.0.0.1"
             if 'host' in srv_cfg:
                 host = srv_cfg['host']
-            servers.append(SocketServer(host, port, is_primary))
+            srv = SocketServer(host, port, is_primary)
         else:
             raise ValueError('Either "cmd" or "port" missing in server configuration')
 
+        if 'initializationOptions' in srv_cfg:
+            srv.initialization_options = srv_cfg['initializationOptions']
+
+        servers.append(srv)
         is_primary = False
 
     return servers
