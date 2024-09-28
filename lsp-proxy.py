@@ -6,15 +6,17 @@
 from abc import ABC, abstractmethod
 import argparse
 import asyncio
+import copy
 import json
 import signal
 import sys
 
 
-preserved_common_requests = [
+preserved_requests = [
     'initialize', 'shutdown',
     'window/showMessageRequest', 'window/showDocument',
-    'workspace/workspaceFolders', 'workspace/applyEdit'
+    'workspace/workspaceFolders', 'workspace/applyEdit',
+    'textDocument/formatting', 'textDocument/rangeFormatting'
 ]
 preserved_client_server_notifications = [
     'initialized', 'exit',
@@ -29,6 +31,12 @@ preserved_server_client_notifications = [
 
 def log(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
+
+
+def safe_get(dct, key):
+    if key and dct and key in dct:
+        return dct[key]
+    return None
 
 
 async def read_message(srv, stream):
@@ -74,9 +82,19 @@ class Server(ABC):
         self.diagnostics = {}
         self.initialization_options = None
         self.use_diagnostics = True
+        self.use_formatting = False
 
     def reset_task(self):
         self.task = asyncio.create_task(read_message(self, self.get_stream_reader()))
+
+    def get_formatting_capabilities(self):
+        if self.initialize_msg:
+            result = safe_get(self.initialize_msg, 'result')
+            capabilities = safe_get(result, 'capabilities')
+            has_formatting = safe_get(capabilities, 'documentFormattingProvider')
+            has_range_formatting = safe_get(capabilities, 'documentRangeFormattingProvider')
+            return has_formatting, has_range_formatting
+        return False, False
 
     @abstractmethod
     async def connect(self) -> bool:
@@ -220,9 +238,34 @@ class Proxy:
 
         return method not in preserved_methods
 
+    def get_formatting_server(self):
+        first_found = None
+        for srv in self.servers:
+            doc_fmt, range_fmt = srv.get_formatting_capabilities()
+            if not first_found and (doc_fmt or range_fmt):
+                first_found = srv
+            if srv.use_formatting and (doc_fmt or range_fmt):
+                return srv
+        return first_found
+
+    def get_initialization_options(self):
+        msg = copy.deepcopy(self.get_primary().initialize_msg)
+        options = msg['result']
+        if 'serverInfo' not in options:
+            options['serverInfo'] = {}
+        options['serverInfo']['name'] = 'lsp-proxy'
+        options['serverInfo']['version'] = '0.1'  # TODO
+        fmt_srv = self.get_formatting_server()
+        capabilities = options['capabilities']
+        if fmt_srv:
+            doc_fmt, range_fmt = fmt_srv.get_formatting_capabilities()
+            capabilities['documentFormattingProvider'] = doc_fmt
+            capabilities['documentRangeFormattingProvider'] = range_fmt
+        return msg
+
     async def process(self, srv, writer, msg, from_server, preserved_methods):
-        method = msg['method'] if 'method' in msg else None
-        iden = msg['id'] if 'id' in msg else None
+        method = safe_get(msg, 'method')
+        iden = safe_get(msg, 'id')
 
         should_send = False
 
@@ -256,26 +299,32 @@ class Proxy:
                 should_send = self.all_initialized()
                 # send initialize response only when all servers returned response
                 if should_send:
-                    # send the primary server's initialize response
-                    msg = self.get_primary().initialize_msg
+                    # send the primary server's initialize response modified
+                    # with other server's initialization options
+                    msg =  self.get_initialization_options()
             elif iden == self.shutdown_id:
                 srv.shutdown_received = True
                 # send shutdown response only when all servers returned response
                 should_send = self.all_shutdown()
         else:
+            params = msg['params']
             if method == 'initialize':
                 self.initialize_id = iden
                 if srv.initialization_options:
-                    msg['params']['initializationOptions'] = srv.initialization_options
+                    params['initializationOptions'] = srv.initialization_options
                 elif not srv.is_primary:
-                    msg['params']['initializationOptions'] = None
+                    params['initializationOptions'] = None
             elif method == 'workspace/didChangeConfiguration':
                 if srv.initialization_options:
-                    msg['params']['settings'] = srv.initialization_options
+                    params['settings'] = srv.initialization_options
                 elif not srv.is_primary:
-                    msg['params']['settings'] = None
+                    params['settings'] = None
             elif method == 'shutdown':
                 self.shutdown_id = iden
+            elif method == 'textDocument/formatting' or method == 'textDocument/rangeFormatting':
+                fmt_srv = self.get_formatting_server()
+                if srv != fmt_srv:
+                    should_send = False
 
         if should_send:
             method_str = method if method else "no method"
@@ -297,12 +346,12 @@ class Proxy:
 
         if from_server:
             await self.process(server, stdout_writer, msg, from_server,
-                    preserved_common_requests + preserved_server_client_notifications)
+                    preserved_requests + preserved_server_client_notifications)
         else:
             for srv in self.servers:
                 if srv.is_connected():
                     await self.process(srv, srv.get_stream_writer(), msg, from_server,
-                            preserved_common_requests + preserved_client_server_notifications)
+                            preserved_requests + preserved_client_server_notifications)
 
     def any_connected(self):
         return any([srv.is_connected() for srv in self.servers])
@@ -389,9 +438,10 @@ def load_config(cfg):
 
         if 'initializationOptions' in srv_cfg:
             srv.initialization_options = srv_cfg['initializationOptions']
-
         if 'useDiagnostics' in srv_cfg:
             srv.use_diagnostics = srv_cfg['useDiagnostics']
+        if 'useFormatting' in srv_cfg:
+            srv.use_formatting = srv_cfg['useFormatting']
 
         servers.append(srv)
         is_primary = False

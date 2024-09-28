@@ -8,18 +8,23 @@ language or to use socket server connection when clients support only
 stdio-based communication.
 
 Technical details:
-- the proxy declares one server as primary - the primary server receives all
-  requests and notifications and all its responses are returned back to the
-  client. The primary server serves as the main server for all LSP features like
-  autocompletion, goto, document symbols, etc.
+- the proxy declares one server as primary - unless configured differently,
+  the primary server receives all requests and notifications and all its
+  responses are returned back to the client. The primary server serves as the
+  main server for all LSP features
 - other servers receive only basic lifecycle and document synchronization
   messages. These allow the non-primary servers to send correct
   `textDocument/publishDiagnostics` notifications which are all merged and
   sent back to the client. This means that non-primary servers can serve as
   linters or error checkers
+- instead of the primary server, some requests (currently only
+  `textDocument/formatting` and `textDocument/rangeFormatting`) can be
+  dispatched to other servers based on the configuration or support
+  of the particular feature by the server
 - `initialize` and `shutdown` requests are synchronized so the request results
   are sent to the client only after all servers return a response. In addition,
-  the client receives the result of `initialize` from the primary server only
+  the client receives the result of `initialize` from the primary server only,
+  modified by features used from other servers
 - `initializationOptions` from the `initialize` request are sent selectively -
   see the `initializationOptions` configuration option below
 
@@ -57,8 +62,21 @@ The first server in the array is primary. Valid configuration options are:
   server. If set to `null`, the proxy forwards the `initializationOptions`
   value from the client for the primary server and sets the value to `null` for
   all other servers
+
+### Dispatching requests to non-primary server
+Some requests, currently only `textDocument/formatting` and
+`textDocument/rangeFormatting`, can be dispatched to other server than the
+primary. Even when not configured explicitly, the proxy checks the
+above-mentioned feature availability and if the primary server does not support
+them, it uses the first configured server that does.
+
+The following configuration options control this behavior:
+- `useFormatting` (default `False`): when set to `True` and the configured
+  server supports formatting, it becomes the server used for code formatting;
+  otherwise, the first configured server supporting code formatting becomes the
+  server used for formatting
 - `useDiagnostics` (default `True`): whether to use diagnostics (errors,
-  warnings) received using `textDocument/publishDiagnostics` from this server
+  warnings) received using `textDocument/publishDiagnostics` from the server
 
 The script can be made executable or started using
 ```
@@ -71,10 +89,7 @@ Possible future improvements
 ----------------------------
 - general multiserver support where the proxy can be configured to e.g. use
   autocompletion from server 1, document symbols from server 2, goto
-  from server 3. This would require merging all the server's `initialize`
-  responses into one that contains all the features from all the clients and
-  then dispatching the requests based on the configuration and server's
-  capabilities
+  from server 3. Currently done for formatting only
 
 ---
 
