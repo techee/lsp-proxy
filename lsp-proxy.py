@@ -13,8 +13,8 @@ import sys
 
 preserved_common_requests = [
     'initialize', 'shutdown',
-    'window/workDoneProgress/create', 'window/showMessageRequest', 'window/showDocument',
-    'workspace/configuration', 'workspace/workspaceFolders', 'workspace/applyEdit'
+    'window/showMessageRequest', 'window/showDocument',
+    'workspace/workspaceFolders', 'workspace/applyEdit'
 ]
 preserved_client_server_notifications = [
     'initialized', 'exit',
@@ -23,8 +23,7 @@ preserved_client_server_notifications = [
 ]
 preserved_server_client_notifications = [
     'textDocument/publishDiagnostics',
-    'window/showMessage', 'window/logMessage',
-    '$/progress'
+    'window/showMessage', 'window/logMessage'
 ]
 
 
