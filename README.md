@@ -18,7 +18,8 @@ Technical details:
   sent back to the client. This means that non-primary servers can serve as
   linters or error checkers
 - instead of the primary server, some requests (currently only
-  `textDocument/formatting` and `textDocument/rangeFormatting`) can be
+  `textDocument/formatting`, `textDocument/rangeFormatting`,
+  `textDocument/completion`, `completionItem/resolve`) can be
   dispatched to other servers based on the configuration or support
   of the particular feature by the server
 - `initialize` and `shutdown` requests are synchronized so the request results
@@ -64,17 +65,20 @@ The first server in the array is primary. Valid configuration options are:
   all other servers
 
 ### Dispatching requests to non-primary server
-Some requests, currently only `textDocument/formatting` and
-`textDocument/rangeFormatting`, can be dispatched to other server than the
-primary. Even when not configured explicitly, the proxy checks the
-above-mentioned feature availability and if the primary server does not support
-them, it uses the first configured server that does.
+Some requests, currently only formatting and completion, can be dispatched to
+other server than the primary. Even when not configured explicitly, the proxy
+checks the above-mentioned feature availability and if the primary server does
+not support them, it uses the first configured server that does.
 
 The following configuration options control this behavior:
 - `useFormatting` (default `False`): when set to `True` and the configured
   server supports formatting, it becomes the server used for code formatting;
   otherwise, the first configured server supporting code formatting becomes the
   server used for formatting
+- `useCompletion` (default `False`): when set to `True` and the configured
+  server supports completion, it becomes the server used for completion;
+  otherwise, the first configured server supporting completion becomes the
+  server used for completion
 - `useDiagnostics` (default `True`): whether to use diagnostics (errors,
   warnings) received using `textDocument/publishDiagnostics` from the server
 
@@ -87,9 +91,8 @@ configuration file as its argument.
 
 Possible future improvements
 ----------------------------
-- general multiserver support where the proxy can be configured to e.g. use
-  autocompletion from server 1, document symbols from server 2, goto
-  from server 3. Currently done for formatting only
+- more configuration options for controlling which requests get dispatched to
+  non-primary servers. Please create an issue if you run into this problem
 
 ---
 

@@ -16,7 +16,8 @@ preserved_requests = [
     'initialize', 'shutdown',
     'window/showMessageRequest', 'window/showDocument',
     'workspace/workspaceFolders', 'workspace/applyEdit',
-    'textDocument/formatting', 'textDocument/rangeFormatting'
+    'textDocument/formatting', 'textDocument/rangeFormatting',
+    'textDocument/completion', 'completionItem/resolve'
 ]
 preserved_client_server_notifications = [
     'initialized', 'exit',
@@ -83,6 +84,7 @@ class Server(ABC):
         self.initialization_options = None
         self.use_diagnostics = True
         self.use_formatting = False
+        self.use_completion = False
 
     def reset_task(self):
         self.task = asyncio.create_task(read_message(self, self.get_stream_reader()))
@@ -91,10 +93,17 @@ class Server(ABC):
         if self.initialize_msg:
             result = safe_get(self.initialize_msg, 'result')
             capabilities = safe_get(result, 'capabilities')
-            has_formatting = safe_get(capabilities, 'documentFormattingProvider')
-            has_range_formatting = safe_get(capabilities, 'documentRangeFormattingProvider')
-            return has_formatting, has_range_formatting
-        return False, False
+            formatting = safe_get(capabilities, 'documentFormattingProvider')
+            range_formatting = safe_get(capabilities, 'documentRangeFormattingProvider')
+            return formatting, range_formatting
+        return None, None
+
+    def get_completion_capability(self):
+        if self.initialize_msg:
+            result = safe_get(self.initialize_msg, 'result')
+            capabilities = safe_get(result, 'capabilities')
+            return safe_get(capabilities, 'completionProvider')
+        return None
 
     @abstractmethod
     async def connect(self) -> bool:
@@ -238,15 +247,20 @@ class Proxy:
 
         return method not in preserved_methods
 
-    def get_formatting_server(self):
+    def get_server_generic(self, condition):
         first_found = None
         for srv in self.servers:
-            doc_fmt, range_fmt = srv.get_formatting_capabilities()
-            if not first_found and (doc_fmt or range_fmt):
+            if not first_found and condition(srv):
                 first_found = srv
-            if srv.use_formatting and (doc_fmt or range_fmt):
+            if srv.use_completion and condition(srv):
                 return srv
         return first_found
+
+    def get_formatting_server(self):
+        return self.get_server_generic(lambda srv: any(srv.get_formatting_capabilities()))
+
+    def get_completion_server(self):
+        return self.get_server_generic(lambda srv: srv.get_completion_capability())
 
     def get_initialization_options(self):
         msg = copy.deepcopy(self.get_primary().initialize_msg)
@@ -255,12 +269,19 @@ class Proxy:
             options['serverInfo'] = {}
         options['serverInfo']['name'] = 'lsp-proxy'
         options['serverInfo']['version'] = '0.1'  # TODO
-        fmt_srv = self.get_formatting_server()
         capabilities = options['capabilities']
+
+        fmt_srv = self.get_formatting_server()
         if fmt_srv:
             doc_fmt, range_fmt = fmt_srv.get_formatting_capabilities()
             capabilities['documentFormattingProvider'] = doc_fmt
             capabilities['documentRangeFormattingProvider'] = range_fmt
+
+        completion_srv = self.get_completion_server()
+        if completion_srv:
+            completion = completion_srv.get_completion_capability()
+            capabilities['completionProvider'] = completion
+
         return msg
 
     async def process(self, srv, writer, msg, from_server, preserved_methods):
@@ -321,9 +342,11 @@ class Proxy:
                     params['settings'] = None
             elif method == 'shutdown':
                 self.shutdown_id = iden
-            elif method == 'textDocument/formatting' or method == 'textDocument/rangeFormatting':
-                fmt_srv = self.get_formatting_server()
-                if srv != fmt_srv:
+            elif method in ['textDocument/formatting', 'textDocument/rangeFormatting']:
+                if srv != self.get_formatting_server():
+                    should_send = False
+            elif method in ['textDocument/completion', 'completionItem/resolve']:
+                if srv != self.get_completion_server():
                     should_send = False
 
         if should_send:
@@ -442,6 +465,8 @@ def load_config(cfg):
             srv.use_diagnostics = srv_cfg['useDiagnostics']
         if 'useFormatting' in srv_cfg:
             srv.use_formatting = srv_cfg['useFormatting']
+        if 'useCompletion' in srv_cfg:
+            srv.use_completion = srv_cfg['useCompletion']
 
         servers.append(srv)
         is_primary = False
