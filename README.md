@@ -20,15 +20,19 @@ Technical details:
 - instead of the primary server, some requests (currently only
   `textDocument/completion`, `completionItem/resolve`,
   `textDocument/signatureHelp`,
-  `textDocument/formatting`, `textDocument/rangeFormatting`) can be
-  dispatched to other servers based on the configuration or support
-  of the particular feature by the server
+  `textDocument/formatting`, `textDocument/rangeFormatting`,
+  `workspace/executeCommand`) can be dispatched to other servers based on the
+  configuration or support of the particular feature by the server
 - `initialize` and `shutdown` requests are synchronized so the request results
   are sent to the client only after all servers return a response. In addition,
   the client receives the result of `initialize` from the primary server only,
   modified by features used from other servers
 - `initializationOptions` from the `initialize` request are sent selectively -
   see the `initializationOptions` configuration option below
+- `CodeActionOptions` and `ExecuteCommandOptions` are merged during
+  `initialize`; subsequent `textDocument/codeAction` requests are sent to all
+  servers supporting code actions, the proxy waits until all the servers return
+  results, and the results are merged into a single result passed to the client
 
 Usage
 -----
@@ -66,11 +70,10 @@ The first server in the array is primary. Valid configuration options are:
   all other servers
 
 ### Dispatching requests to non-primary server
-Some requests, currently only completion, signature help, and formatting, can be
-dispatched to other server than the primary. Even when not configured
-explicitly, the proxy checks the above-mentioned feature availability and if the
-primary server does not support them, it uses the first configured server that
-does.
+Some requests, can be dispatched to other server than the primary. Even when not
+configured explicitly, the proxy checks availability of the particular feature
+and if the primary server does not support it, it uses the first configured
+server in the list that does.
 
 The following configuration options control this behavior:
 - `useCompletion` (default `False`): when set to `True` and the configured
@@ -85,6 +88,10 @@ The following configuration options control this behavior:
   server supports formatting, it becomes the server used for code formatting;
   otherwise, the first configured server supporting code formatting becomes the
   server used for formatting
+- `useExecuteCommand` (default `False`): when set to `True` and the configured
+  server supports the particular command to be executed, it becomes the server
+  used for command execution; otherwise, the first configured server supporting
+  the particular command becomes the server used for command execution
 - `useDiagnostics` (default `True`): whether to use diagnostics (errors,
   warnings) received using `textDocument/publishDiagnostics` from the server
 

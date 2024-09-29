@@ -3,13 +3,13 @@
 # Author:  Jiri Techet, 2024
 # License: GPL v2 or later
 
-from abc import ABC, abstractmethod
 import argparse
 import asyncio
 import copy
 import json
 import signal
 import sys
+from abc import ABC, abstractmethod
 
 
 preserved_requests = [
@@ -18,7 +18,9 @@ preserved_requests = [
     'workspace/workspaceFolders', 'workspace/applyEdit',
     'textDocument/formatting', 'textDocument/rangeFormatting',
     'textDocument/completion', 'completionItem/resolve',
-    'textDocument/signatureHelp'
+    'textDocument/signatureHelp',
+    'textDocument/codeAction',
+    'workspace/executeCommand'
 ]
 preserved_client_server_notifications = [
     'initialized', 'exit',
@@ -87,6 +89,10 @@ class Server(ABC):
         self.use_formatting = False
         self.use_completion = False
         self.use_signature = False
+        self.use_execute_command = False
+        self.received_code_actions = {}
+        self.supported_code_action_kinds = []
+        self.supported_commands = []
 
     def reset_task(self):
         self.task = asyncio.create_task(read_message(self, self.get_stream_reader()))
@@ -116,6 +122,20 @@ class Server(ABC):
         if capabilities:
             return safe_get(capabilities, 'signatureHelpProvider')
         return None
+
+    def get_code_action_capability(self):
+        capabilities = self._get_capabilities()
+        if capabilities:
+            return safe_get(capabilities, 'codeActionProvider')
+        return None
+
+    def get_execute_command_capability(self, command):
+        capabilities = self._get_capabilities()
+        if capabilities:
+            provider = safe_get(capabilities, 'executeCommandProvider')
+            if provider:
+                return command in provider['commands']
+        return False
 
     @abstractmethod
     async def connect(self) -> bool:
@@ -232,6 +252,7 @@ class Proxy:
         self.servers = servers
         self.initialize_id = -1
         self.shutdown_id = -1
+        self.code_action_ids = []
 
     def all_initialized(self):
         return all([srv.initialize_msg for srv in self.servers])
@@ -280,14 +301,17 @@ class Proxy:
         return self.get_server_generic(lambda srv: srv.use_signature,
             lambda srv: srv.get_signature_capability())
 
+    def get_command_server(self, command):
+        return self.get_server_generic(lambda srv: srv.use_execute_command,
+            lambda srv: srv.get_execute_command_capability(command))
+
     def get_initialization_options(self):
         msg = copy.deepcopy(self.get_primary().initialize_msg)
-        options = msg['result']
-        if 'serverInfo' not in options:
-            options['serverInfo'] = {}
-        options['serverInfo']['name'] = 'lsp-proxy'
-        options['serverInfo']['version'] = '0.1'  # TODO
-        capabilities = options['capabilities']
+        result = msg['result']
+        result['serverInfo'] = {}
+        result['serverInfo']['name'] = 'lsp-proxy'
+        result['serverInfo']['version'] = '0.1'  # TODO
+        capabilities = result['capabilities']
 
         fmt_srv = self.get_formatting_server()
         if fmt_srv:
@@ -305,11 +329,39 @@ class Proxy:
             signature = signature_srv.get_signature_capability()
             capabilities['signatureHelpProvider'] = signature
 
+        code_action_kinds = []
+        commands = []
+        supports_code_action = False
+        for srv in self.servers:
+            srv_capabilities = srv.initialize_msg['result']['capabilities']
+            provider = safe_get(srv_capabilities, 'codeActionProvider')
+            if provider:
+                supports_code_action = True
+                # can also be just boolean
+                if isinstance(provider, dict) and 'codeActionKinds' in provider:
+                    srv.supported_code_action_kinds = provider['codeActionKinds']
+                    code_action_kinds += srv.supported_code_action_kinds
+
+            provider = safe_get(srv_capabilities, 'executeCommandProvider')
+            if provider:
+                if 'commands' in provider:
+                    srv.supported_commands = provider['commands']
+                    commands += srv.supported_commands
+
+        if supports_code_action:
+            capabilities['codeActionProvider'] = {}
+            capabilities['codeActionProvider']['codeActionKinds'] = list(set(code_action_kinds))
+
+        if len(commands) > 0:
+            capabilities['executeCommandProvider'] = {}
+            capabilities['executeCommandProvider']['commands'] = list(set(commands))
+
         return msg
 
     async def process(self, srv, writer, msg, from_server, preserved_methods):
         method = safe_get(msg, 'method')
         iden = safe_get(msg, 'id')
+        srv_name = srv.get_name()
 
         should_send = False
 
@@ -345,11 +397,29 @@ class Proxy:
                 if should_send:
                     # send the primary server's initialize response modified
                     # with other server's initialization options
-                    msg =  self.get_initialization_options()
+                    msg = self.get_initialization_options()
+                    srv_name = 'lsp-proxy'
             elif iden == self.shutdown_id:
                 srv.shutdown_received = True
                 # send shutdown response only when all servers returned response
                 should_send = self.all_shutdown()
+                if should_send:
+                    srv_name = 'lsp-proxy'
+            elif iden in self.code_action_ids:
+                self.code_action_ids.remove(iden)
+                if 'result' in msg:
+                    srv.received_code_actions[iden] = msg['result']
+                # send when the last request returned response
+                should_send = iden not in self.code_action_ids
+                if should_send:
+                    srv_name = 'lsp-proxy'
+                    msg['result'] = []
+                    result = msg['result']
+                    for s in self.servers:
+                        srv_result = s.received_code_actions[iden]
+                        if srv_result:
+                            result += srv_result
+                            del(s.received_code_actions[iden])
         else:
             params = msg['params']
             if method == 'initialize':
@@ -374,6 +444,15 @@ class Proxy:
             elif method == 'textDocument/signatureHelp':
                 if srv != self.get_signature_server():
                     should_send = False
+            elif method == 'textDocument/codeAction':
+                if not srv.get_code_action_capability():
+                    should_send = False
+                if should_send:
+                    self.code_action_ids.append(iden)
+            elif method == 'workspace/executeCommand':
+                cmd = msg['params']['command']
+                if srv != self.get_command_server(cmd):
+                    should_send = False
 
         if should_send:
             method_str = method if method else "no method"
@@ -383,9 +462,9 @@ class Proxy:
                     srv.diagnostics[uri] = msg['params']['diagnostics']
                     # modify msg to contain diagnostics from all servers
                     msg['params']['diagnostics'] = self.get_merged_diagnostics(uri)
-                log(f'    C <-- S {method_str} <{srv.get_name()}>')
+                log(f'    C <-- S {method_str} <{srv_name}>')
             else:
-                log(f'    C --> S {method_str} <{srv.get_name()}>')
+                log(f'    C --> S {method_str} <{srv_name}>')
 
             writer.write(self.construct_message(msg))
             await writer.drain()
@@ -495,6 +574,8 @@ def load_config(cfg):
             srv.use_completion = srv_cfg['useCompletion']
         if 'useSignatureHelp' in srv_cfg:
             srv.use_signature = srv_cfg['useSignatureHelp']
+        if 'useExecuteCommand' in srv_cfg:
+            srv.use_execute_command = srv_cfg['useExecuteCommand']
 
         servers.append(srv)
         is_primary = False
