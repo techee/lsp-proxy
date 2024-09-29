@@ -390,36 +390,37 @@ class Proxy:
                 pending[iden] = method
 
         if from_server:
-            if iden == self.initialize_id:
-                srv.initialize_msg = msg
-                should_send = self.all_initialized()
-                # send initialize response only when all servers returned response
-                if should_send:
-                    # send the primary server's initialize response modified
-                    # with other server's initialization options
-                    msg = self.get_initialization_options()
-                    srv_name = 'lsp-proxy'
-            elif iden == self.shutdown_id:
-                srv.shutdown_received = True
-                # send shutdown response only when all servers returned response
-                should_send = self.all_shutdown()
-                if should_send:
-                    srv_name = 'lsp-proxy'
-            elif iden in self.code_action_ids:
-                self.code_action_ids.remove(iden)
-                if 'result' in msg:
-                    srv.received_code_actions[iden] = msg['result']
-                # send when the last request returned response
-                should_send = iden not in self.code_action_ids
-                if should_send:
-                    srv_name = 'lsp-proxy'
-                    msg['result'] = []
-                    result = msg['result']
-                    for s in self.servers:
-                        srv_result = s.received_code_actions[iden]
-                        if srv_result:
-                            result += srv_result
-                            del(s.received_code_actions[iden])
+            if 'result' in msg:  # response to client's request
+                if iden == self.initialize_id:
+                    srv.initialize_msg = msg
+                    should_send = self.all_initialized()
+                    # send initialize response only when all servers returned response
+                    if should_send:
+                        # send the primary server's initialize response modified
+                        # with other server's initialization options
+                        msg = self.get_initialization_options()
+                        srv_name = 'lsp-proxy'
+                elif iden == self.shutdown_id:
+                    srv.shutdown_received = True
+                    # send shutdown response only when all servers returned response
+                    should_send = self.all_shutdown()
+                    if should_send:
+                        srv_name = 'lsp-proxy'
+                elif iden in self.code_action_ids:
+                    self.code_action_ids.remove(iden)
+                    if 'result' in msg:
+                        srv.received_code_actions[iden] = msg['result']
+                    # send when the last request returned response
+                    should_send = iden not in self.code_action_ids
+                    if should_send:
+                        srv_name = 'lsp-proxy'
+                        msg['result'] = []
+                        result = msg['result']
+                        for s in self.servers:
+                            srv_result = s.received_code_actions[iden]
+                            if srv_result:
+                                result += srv_result
+                                del(s.received_code_actions[iden])
         else:
             params = safe_get(msg, 'params')
             if method == 'initialize':
