@@ -422,14 +422,15 @@ class Proxy:
                                 result += srv_result
                                 del(s.received_code_actions[iden])
         else:
-            params = safe_get(msg, 'params')
             if method == 'initialize':
+                params = msg['params']
                 self.initialize_id = iden
                 if srv.initialization_options:
                     params['initializationOptions'] = srv.initialization_options
                 elif not srv.is_primary:
                     params['initializationOptions'] = None
             elif method == 'workspace/didChangeConfiguration':
+                params = msg['params']
                 if srv.initialization_options:
                     params['settings'] = srv.initialization_options
                 elif not srv.is_primary:
