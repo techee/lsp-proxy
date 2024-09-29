@@ -17,7 +17,8 @@ preserved_requests = [
     'window/showMessageRequest', 'window/showDocument',
     'workspace/workspaceFolders', 'workspace/applyEdit',
     'textDocument/formatting', 'textDocument/rangeFormatting',
-    'textDocument/completion', 'completionItem/resolve'
+    'textDocument/completion', 'completionItem/resolve',
+    'textDocument/signatureHelp'
 ]
 preserved_client_server_notifications = [
     'initialized', 'exit',
@@ -85,24 +86,35 @@ class Server(ABC):
         self.use_diagnostics = True
         self.use_formatting = False
         self.use_completion = False
+        self.use_signature = False
 
     def reset_task(self):
         self.task = asyncio.create_task(read_message(self, self.get_stream_reader()))
 
-    def get_formatting_capabilities(self):
+    def _get_capabilities(self):
         if self.initialize_msg:
             result = safe_get(self.initialize_msg, 'result')
-            capabilities = safe_get(result, 'capabilities')
+            return safe_get(result, 'capabilities')
+        return None
+
+    def get_formatting_capabilities(self):
+        capabilities = self._get_capabilities()
+        if capabilities:
             formatting = safe_get(capabilities, 'documentFormattingProvider')
             range_formatting = safe_get(capabilities, 'documentRangeFormattingProvider')
             return formatting, range_formatting
         return None, None
 
     def get_completion_capability(self):
-        if self.initialize_msg:
-            result = safe_get(self.initialize_msg, 'result')
-            capabilities = safe_get(result, 'capabilities')
+        capabilities = self._get_capabilities()
+        if capabilities:
             return safe_get(capabilities, 'completionProvider')
+        return None
+
+    def get_signature_capability(self):
+        capabilities = self._get_capabilities()
+        if capabilities:
+            return safe_get(capabilities, 'signatureHelpProvider')
         return None
 
     @abstractmethod
@@ -247,20 +259,26 @@ class Proxy:
 
         return method not in preserved_methods
 
-    def get_server_generic(self, condition):
+    def get_server_generic(self, config_condition, srv_condition):
         first_found = None
         for srv in self.servers:
-            if not first_found and condition(srv):
+            if not first_found and srv_condition(srv):
                 first_found = srv
-            if srv.use_completion and condition(srv):
+            if config_condition(srv) and srv_condition(srv):
                 return srv
         return first_found
 
     def get_formatting_server(self):
-        return self.get_server_generic(lambda srv: any(srv.get_formatting_capabilities()))
+        return self.get_server_generic(lambda srv: srv.use_formatting,
+            lambda srv: any(srv.get_formatting_capabilities()))
 
     def get_completion_server(self):
-        return self.get_server_generic(lambda srv: srv.get_completion_capability())
+        return self.get_server_generic(lambda srv: srv.use_completion,
+            lambda srv: srv.get_completion_capability())
+
+    def get_signature_server(self):
+        return self.get_server_generic(lambda srv: srv.use_signature,
+            lambda srv: srv.get_signature_capability())
 
     def get_initialization_options(self):
         msg = copy.deepcopy(self.get_primary().initialize_msg)
@@ -281,6 +299,11 @@ class Proxy:
         if completion_srv:
             completion = completion_srv.get_completion_capability()
             capabilities['completionProvider'] = completion
+
+        signature_srv = self.get_signature_server()
+        if signature_srv:
+            signature = signature_srv.get_signature_capability()
+            capabilities['signatureHelpProvider'] = signature
 
         return msg
 
@@ -347,6 +370,9 @@ class Proxy:
                     should_send = False
             elif method in ['textDocument/completion', 'completionItem/resolve']:
                 if srv != self.get_completion_server():
+                    should_send = False
+            elif method == 'textDocument/signatureHelp':
+                if srv != self.get_signature_server():
                     should_send = False
 
         if should_send:
@@ -467,6 +493,8 @@ def load_config(cfg):
             srv.use_formatting = srv_cfg['useFormatting']
         if 'useCompletion' in srv_cfg:
             srv.use_completion = srv_cfg['useCompletion']
+        if 'useSignatureHelp' in srv_cfg:
+            srv.use_signature = srv_cfg['useSignatureHelp']
 
         servers.append(srv)
         is_primary = False

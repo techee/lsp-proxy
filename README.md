@@ -18,8 +18,9 @@ Technical details:
   sent back to the client. This means that non-primary servers can serve as
   linters or error checkers
 - instead of the primary server, some requests (currently only
-  `textDocument/formatting`, `textDocument/rangeFormatting`,
-  `textDocument/completion`, `completionItem/resolve`) can be
+  `textDocument/completion`, `completionItem/resolve`,
+  `textDocument/signatureHelp`,
+  `textDocument/formatting`, `textDocument/rangeFormatting`) can be
   dispatched to other servers based on the configuration or support
   of the particular feature by the server
 - `initialize` and `shutdown` requests are synchronized so the request results
@@ -65,20 +66,25 @@ The first server in the array is primary. Valid configuration options are:
   all other servers
 
 ### Dispatching requests to non-primary server
-Some requests, currently only formatting and completion, can be dispatched to
-other server than the primary. Even when not configured explicitly, the proxy
-checks the above-mentioned feature availability and if the primary server does
-not support them, it uses the first configured server that does.
+Some requests, currently only completion, signature help, and formatting, can be
+dispatched to other server than the primary. Even when not configured
+explicitly, the proxy checks the above-mentioned feature availability and if the
+primary server does not support them, it uses the first configured server that
+does.
 
 The following configuration options control this behavior:
-- `useFormatting` (default `False`): when set to `True` and the configured
-  server supports formatting, it becomes the server used for code formatting;
-  otherwise, the first configured server supporting code formatting becomes the
-  server used for formatting
 - `useCompletion` (default `False`): when set to `True` and the configured
   server supports completion, it becomes the server used for completion;
   otherwise, the first configured server supporting completion becomes the
   server used for completion
+- `useSignatureHelp` (default `False`): when set to `True` and the configured
+  server supports signature help, it becomes the server used for signature help;
+  otherwise, the first configured server supporting signature help becomes the
+  server used for signature help
+- `useFormatting` (default `False`): when set to `True` and the configured
+  server supports formatting, it becomes the server used for code formatting;
+  otherwise, the first configured server supporting code formatting becomes the
+  server used for formatting
 - `useDiagnostics` (default `True`): whether to use diagnostics (errors,
   warnings) received using `textDocument/publishDiagnostics` from the server
 
@@ -88,11 +94,6 @@ python3 lsp-proxy.py <config_file>
 ```
 and configured in your editor as the LSP server executable taking the
 configuration file as its argument.
-
-Possible future improvements
-----------------------------
-- more configuration options for controlling which requests get dispatched to
-  non-primary servers. Please create an issue if you run into this problem
 
 ---
 
