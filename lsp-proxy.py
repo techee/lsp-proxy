@@ -421,7 +421,7 @@ class Proxy:
                             result += srv_result
                             del(s.received_code_actions[iden])
         else:
-            params = msg['params']
+            params = safe_get(msg, 'params')
             if method == 'initialize':
                 self.initialize_id = iden
                 if srv.initialization_options:
