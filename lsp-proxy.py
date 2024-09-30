@@ -13,7 +13,6 @@ from abc import ABC, abstractmethod
 
 
 # all server->client requests and notifications are preserved
-# TODO: handle workspace/configuration
 preserved_client_server_requests = [
     'initialize', 'shutdown',
     'textDocument/formatting', 'textDocument/rangeFormatting',
@@ -353,6 +352,14 @@ class Proxy:
         if len(commands) > 0:
             capabilities['executeCommandProvider'] = {}
             capabilities['executeCommandProvider']['commands'] = list(set(commands))
+
+        # explicitly disable some features
+        workspace = safe_get(capabilities, 'workspace')
+        if workspace:
+            workspace['configuration'] = False
+            workspace['fileOperations'] = None
+        if 'notebookDocument' in capabilities:
+            capabilities['notebookDocument'] = None
 
         return msg
 
