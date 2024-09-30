@@ -13,7 +13,8 @@ from abc import ABC, abstractmethod
 
 
 # all server->client requests and notifications are preserved
-preserved_client_server_requests = [
+# this is only for client->server requests and notifications
+preserved_requests = [
     'initialize', 'shutdown',
     'textDocument/formatting', 'textDocument/rangeFormatting',
     'textDocument/completion', 'completionItem/resolve',
@@ -21,7 +22,7 @@ preserved_client_server_requests = [
     'textDocument/codeAction',
     'workspace/executeCommand'
 ]
-preserved_client_server_notifications = [
+preserved_notifications = [
     'initialized', 'exit',
     'textDocument/didOpen', 'textDocument/didChange', 'textDocument/didSave', 'textDocument/didClose',
     'workspace/didChangeWorkspaceFolders', 'workspace/didChangeConfiguration'
@@ -479,17 +480,19 @@ class Proxy:
 
     async def dispatch(self, msg, stdout_writer, server):
         from_server = server is not None
-        req_reply_sent = False
 
         if from_server:
             # we forward all requests from the server to client, no need to check
             # if reply was sent
             await self.process(server, stdout_writer, msg, from_server, [])
         else:
+            req_reply_sent = False
+
             for srv in self.servers:
                 if srv.is_connected():
-                    req_reply_sent |= await self.process(srv, srv.get_stream_writer(), msg, from_server,
-                            preserved_client_server_requests + preserved_client_server_notifications)
+                    reply_sent = await self.process(srv, srv.get_stream_writer(), msg, from_server,
+                        preserved_requests + preserved_notifications)
+                    req_reply_sent = req_reply_sent or reply_sent
 
             # when request filtered-out, we still have to return something back
             # to the client
