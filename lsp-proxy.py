@@ -27,7 +27,7 @@ preserved_client_server_notifications = [
     'textDocument/didOpen', 'textDocument/didChange', 'textDocument/didSave', 'textDocument/didClose',
     'workspace/didChangeWorkspaceFolders', 'workspace/didChangeConfiguration'
 ]
-
+proxy_name = 'lsp-proxy'
 
 def log(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
@@ -307,7 +307,7 @@ class Proxy:
         msg = copy.deepcopy(self.get_primary().initialize_msg)
         result = msg['result']
         result['serverInfo'] = {}
-        result['serverInfo']['name'] = 'lsp-proxy'
+        result['serverInfo']['name'] = proxy_name
         result['serverInfo']['version'] = '0.1'  # TODO
         capabilities = result['capabilities']
 
@@ -388,7 +388,7 @@ class Proxy:
                 pending[iden] = method
 
         if from_server:
-            if 'result' in msg:  # response to client's request
+            if 'method' not in msg and 'id' in msg:  # response to client's request
                 if iden == self.initialize_id:
                     srv.initialize_msg = msg
                     should_send = self.all_initialized()
@@ -397,20 +397,20 @@ class Proxy:
                         # send the primary server's initialize response modified
                         # with other server's initialization options
                         msg = self.get_initialization_options()
-                        srv_name = 'lsp-proxy'
+                        srv_name = proxy_name
                 elif iden == self.shutdown_id:
                     srv.shutdown_received = True
                     # send shutdown response only when all servers returned response
                     should_send = self.all_shutdown()
                     if should_send:
-                        srv_name = 'lsp-proxy'
+                        srv_name = proxy_name
                 elif iden in self.code_action_ids:
                     self.code_action_ids.remove(iden)
                     srv.received_code_actions[iden] = msg['result']
                     # send when the last request returned response
                     should_send = iden not in self.code_action_ids
                     if should_send:
-                        srv_name = 'lsp-proxy'
+                        srv_name = proxy_name
                         msg['result'] = []
                         result = msg['result']
                         for s in self.servers:
@@ -468,16 +468,39 @@ class Proxy:
             writer.write(self.construct_message(msg))
             await writer.drain()
 
+        return should_send or not (method and iden)
+
     async def dispatch(self, msg, stdout_writer, server):
         from_server = server is not None
+        req_reply_sent = False
 
         if from_server:
+            # we forward all requests from the server to client, no need to check
+            # if reply was sent
             await self.process(server, stdout_writer, msg, from_server, [])
         else:
             for srv in self.servers:
                 if srv.is_connected():
-                    await self.process(srv, srv.get_stream_writer(), msg, from_server,
+                    req_reply_sent |= await self.process(srv, srv.get_stream_writer(), msg, from_server,
                             preserved_client_server_requests + preserved_client_server_notifications)
+
+            # when request filtered-out, we still have to return something back
+            # to the client
+            if not req_reply_sent:
+                method = msg["method"]
+                err_msg = f'Method {method} not implemented by {proxy_name}'
+                resp_error = {
+                    'jsonrpc': '2.0',
+                    'id': msg['id'],
+                    'error': {
+                        'code': -32601,  # MethodNotFound
+                        'message': err_msg
+                    }
+                }
+                log(f'    C --> S {method} <{proxy_name}>')
+                log(f'    C <-- S {method} <{proxy_name}> (error response)')
+                stdout_writer.write(self.construct_message(resp_error))
+                await stdout_writer.drain()
 
     def any_connected(self):
         return any([srv.is_connected() for srv in self.servers])
