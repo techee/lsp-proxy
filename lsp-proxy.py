@@ -12,10 +12,10 @@ import sys
 from abc import ABC, abstractmethod
 
 
-preserved_requests = [
+# all server->client requests and notifications are preserved
+# TODO: handle workspace/configuration
+preserved_client_server_requests = [
     'initialize', 'shutdown',
-    'window/showMessageRequest', 'window/showDocument',
-    'workspace/workspaceFolders', 'workspace/applyEdit',
     'textDocument/formatting', 'textDocument/rangeFormatting',
     'textDocument/completion', 'completionItem/resolve',
     'textDocument/signatureHelp',
@@ -26,10 +26,6 @@ preserved_client_server_notifications = [
     'initialized', 'exit',
     'textDocument/didOpen', 'textDocument/didChange', 'textDocument/didSave', 'textDocument/didClose',
     'workspace/didChangeWorkspaceFolders', 'workspace/didChangeConfiguration'
-]
-preserved_server_client_notifications = [
-    'textDocument/publishDiagnostics',
-    'window/showMessage', 'window/logMessage'
 ]
 
 
@@ -274,11 +270,13 @@ class Proxy:
         msg_str = json.dumps(msg).encode('utf-8')
         return b'Content-Length: ' + str(len(msg_str)).encode('utf-8') + b'\r\n\r\n' + msg_str
 
-    def filter_msg(self, method, is_primary, preserved_methods):
+    def filter_msg(self, method, is_primary, preserved_methods, from_server):
         if is_primary:
             return False
 
-        return method not in preserved_methods
+        # keep all requests coming from server in addition to preserver methods -
+        # there must be a response for every request
+        return not (from_server or method in preserved_methods)
 
     def get_server_generic(self, config_condition, srv_condition):
         first_found = None
@@ -377,7 +375,7 @@ class Proxy:
             # update method name based on what we previously assigned to the id
             method = pending[iden]
             del pending[iden]
-        elif not self.filter_msg(method, srv.is_primary, preserved_methods):
+        elif not self.filter_msg(method, srv.is_primary, preserved_methods, from_server):
             # this is a request or notification that hasn't been filtered and should
             # be sent
             should_send = True
@@ -475,13 +473,12 @@ class Proxy:
         from_server = server is not None
 
         if from_server:
-            await self.process(server, stdout_writer, msg, from_server,
-                    preserved_requests + preserved_server_client_notifications)
+            await self.process(server, stdout_writer, msg, from_server, [])
         else:
             for srv in self.servers:
                 if srv.is_connected():
                     await self.process(srv, srv.get_stream_writer(), msg, from_server,
-                            preserved_requests + preserved_client_server_notifications)
+                            preserved_client_server_requests + preserved_client_server_notifications)
 
     def any_connected(self):
         return any([srv.is_connected() for srv in self.servers])
