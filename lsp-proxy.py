@@ -406,8 +406,7 @@ class Proxy:
                         srv_name = 'lsp-proxy'
                 elif iden in self.code_action_ids:
                     self.code_action_ids.remove(iden)
-                    if 'result' in msg:
-                        srv.received_code_actions[iden] = msg['result']
+                    srv.received_code_actions[iden] = msg['result']
                     # send when the last request returned response
                     should_send = iden not in self.code_action_ids
                     if should_send:
