@@ -368,6 +368,7 @@ class Proxy:
     async def process(self, srv, writer, msg, from_server, preserved_methods):
         method = safe_get(msg, 'method')
         iden = safe_get(msg, 'id')
+        is_error = 'error' in msg
         srv_name = srv.get_name()
 
         should_send = False
@@ -413,7 +414,7 @@ class Proxy:
                     should_send = self.all_shutdown()
                     if should_send:
                         srv_name = proxy_name
-                elif iden in self.code_action_ids:
+                elif not is_error and iden in self.code_action_ids:
                     self.code_action_ids.remove(iden)
                     srv.received_code_actions[iden] = msg['result']
                     # send when the last request returned response
@@ -429,18 +430,20 @@ class Proxy:
                                 del(s.received_code_actions[iden])
         else:
             if method == 'initialize':
-                params = msg['params']
                 self.initialize_id = iden
-                if srv.initialization_options:
-                    params['initializationOptions'] = srv.initialization_options
-                elif not srv.is_primary:
-                    params['initializationOptions'] = None
+                if not is_error:
+                    params = msg['params']
+                    if srv.initialization_options:
+                        params['initializationOptions'] = srv.initialization_options
+                    elif not srv.is_primary:
+                        params['initializationOptions'] = None
             elif method == 'workspace/didChangeConfiguration':
-                params = msg['params']
-                if srv.initialization_options:
-                    params['settings'] = srv.initialization_options
-                elif not srv.is_primary:
-                    params['settings'] = None
+                if not is_error:
+                    params = msg['params']
+                    if srv.initialization_options:
+                        params['settings'] = srv.initialization_options
+                    elif not srv.is_primary:
+                        params['settings'] = None
             elif method == 'shutdown':
                 self.shutdown_id = iden
             elif method in ['textDocument/formatting', 'textDocument/rangeFormatting']:
@@ -458,14 +461,15 @@ class Proxy:
                 if should_send:
                     self.code_action_ids.append(iden)
             elif method == 'workspace/executeCommand':
-                cmd = msg['params']['command']
-                if srv != self.get_command_server(cmd):
-                    should_send = False
+                if not is_error:
+                    cmd = safe_get(msg['params'], 'command')
+                    if cmd and srv != self.get_command_server(cmd):
+                        should_send = False
 
         if should_send:
             method_str = method if method else "no method"
             if from_server:
-                if method == 'textDocument/publishDiagnostics':
+                if method == 'textDocument/publishDiagnostics' and not is_error:
                     uri = msg['params']['uri']
                     srv.diagnostics[uri] = msg['params']['diagnostics']
                     # modify msg to contain diagnostics from all servers
