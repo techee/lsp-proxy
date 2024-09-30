@@ -327,6 +327,7 @@ class Proxy:
             signature = signature_srv.get_signature_capability()
             capabilities['signatureHelpProvider'] = signature
 
+        # collect code action kinds and commands from all initialize responses
         code_action_kinds = []
         commands = []
         supports_code_action = False
