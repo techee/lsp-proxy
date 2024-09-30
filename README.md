@@ -5,7 +5,7 @@ lsp-proxy is a Python script that acts as a proxy between a LSP client and
 one or more LSP servers. This gives the possibility to run multiple LSP
 servers to clients that support only a single LSP server for one programming
 language or to use socket server connection when clients support only
-stdio-based communication.
+stdin/stdout-based communication.
 
 Technical details:
 - the proxy declares one server as primary - unless configured differently,
