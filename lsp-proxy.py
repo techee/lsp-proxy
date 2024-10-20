@@ -446,7 +446,7 @@ class Proxy:
                         params['settings'] = None
             elif method == 'shutdown':
                 self.shutdown_id = iden
-            elif method in ['textDocument/formatting', 'textDocument/rangeFormatting']:
+            elif method in ['textDocument/formatting', 'textDocument/rangeFormatting', 'textDocument/onTypeFormatting']:
                 if srv != self.get_formatting_server():
                     should_send = False
             elif method in ['textDocument/completion', 'completionItem/resolve']:
@@ -455,7 +455,7 @@ class Proxy:
             elif method == 'textDocument/signatureHelp':
                 if srv != self.get_signature_server():
                     should_send = False
-            elif method == 'textDocument/codeAction':
+            elif method in ['textDocument/codeAction', 'codeAction/resolve']:
                 if not srv.get_code_action_capability():
                     should_send = False
                 if should_send:
