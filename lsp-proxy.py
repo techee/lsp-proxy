@@ -368,7 +368,7 @@ class Proxy:
     async def process(self, srv, writer, msg, from_server, preserved_methods):
         method = safe_get(msg, 'method')
         iden = safe_get(msg, 'id')
-        is_error = 'error' in msg
+        is_error = safe_get(msg, 'error') is not None
         srv_name = srv.get_name()
 
         should_send = False
@@ -427,7 +427,7 @@ class Proxy:
                             srv_result = s.received_code_actions[iden]
                             if srv_result:
                                 result += srv_result
-                                del(s.received_code_actions[iden])
+                                del s.received_code_actions[iden]
         else:
             if method == 'initialize':
                 self.initialize_id = iden
