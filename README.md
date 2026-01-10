@@ -102,6 +102,11 @@ python3 lsp-proxy.py <config_file>
 and configured in your editor as the LSP server executable taking the
 configuration file as its argument.
 
+Similar software
+----------------
+Check [rassumfrassum](https://github.com/joaotavora/rassumfrassum) for an
+alternative implementaion of this idea.
+
 ---
 
-Jiri Techet, 2025
+Jiri Techet, 2026
