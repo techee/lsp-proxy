@@ -17,6 +17,9 @@ Technical details:
   `textDocument/publishDiagnostics` notifications which are all merged and
   sent back to the client. This means that non-primary servers can serve as
   linters or error checkers
+- pull diagnostics (`textDocument/diagnostic`) are not supported. The proxy
+  hides the corresponding client capability from all servers so they publish
+  diagnostics using `textDocument/publishDiagnostics` which the proxy can merge
 - instead of the primary server, some requests (currently only
   `textDocument/completion`, `completionItem/resolve`,
   `textDocument/signatureHelp`,

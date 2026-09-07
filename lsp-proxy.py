@@ -432,6 +432,9 @@ class Proxy:
             workspace['fileOperations'] = None
         if 'notebookDocument' in capabilities:
             capabilities['notebookDocument'] = None
+        # pull diagnostics are hidden from servers (see 'initialize' handling)
+        if 'diagnosticProvider' in capabilities:
+            del capabilities['diagnosticProvider']
 
         return msg
 
@@ -524,6 +527,18 @@ class Proxy:
                         params['initializationOptions'] = srv.initialization_options
                     elif not srv.is_primary:
                         params['initializationOptions'] = None
+                    # the proxy merges diagnostics of all servers received using
+                    # textDocument/publishDiagnostics. Servers supporting pull
+                    # diagnostics (textDocument/diagnostic) may stop publishing
+                    # them when the client supports pull diagnostics so hide this
+                    # client capability from all servers
+                    client_capabilities = safe_get(params, 'capabilities')
+                    text_document = safe_get(client_capabilities, 'textDocument')
+                    if text_document and 'diagnostic' in text_document:
+                        del text_document['diagnostic']
+                    workspace = safe_get(client_capabilities, 'workspace')
+                    if workspace and 'diagnostics' in workspace:
+                        del workspace['diagnostics']
             elif method == 'workspace/didChangeConfiguration':
                 if not is_error:
                     params = msg['params']
