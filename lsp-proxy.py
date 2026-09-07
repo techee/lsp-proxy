@@ -44,6 +44,12 @@ def safe_get(dct, key):
     return None
 
 
+def is_supported(capability):
+    # server capabilities are either booleans or option objects which may be
+    # empty ({} is falsy in Python but means the feature is supported)
+    return capability is not None and capability is not False
+
+
 async def read_message(srv, stream):
     try:
         # HTTP-like header separated by newline
@@ -329,15 +335,15 @@ class Proxy:
 
     def get_formatting_server(self):
         return self.get_server_generic(lambda srv: srv.use_formatting,
-            lambda srv: any(srv.get_formatting_capabilities()))
+            lambda srv: any(is_supported(c) for c in srv.get_formatting_capabilities()))
 
     def get_completion_server(self):
         return self.get_server_generic(lambda srv: srv.use_completion,
-            lambda srv: srv.get_completion_capability())
+            lambda srv: is_supported(srv.get_completion_capability()))
 
     def get_signature_server(self):
         return self.get_server_generic(lambda srv: srv.use_signature,
-            lambda srv: srv.get_signature_capability())
+            lambda srv: is_supported(srv.get_signature_capability()))
 
     def get_command_server(self, command):
         return self.get_server_generic(lambda srv: srv.use_execute_command,
@@ -405,7 +411,7 @@ class Proxy:
         for srv in self.servers:
             srv_capabilities = srv.initialize_msg['result']['capabilities']
             provider = safe_get(srv_capabilities, 'codeActionProvider')
-            if provider:
+            if is_supported(provider):
                 supports_code_action = True
                 # can also be just boolean
                 if isinstance(provider, dict) and 'codeActionKinds' in provider:
@@ -567,7 +573,7 @@ class Proxy:
                 if srv != self.get_signature_server():
                     should_send = False
             elif method == 'textDocument/codeAction':
-                if not srv.get_code_action_capability():
+                if not is_supported(srv.get_code_action_capability()):
                     should_send = False
                 if should_send:
                     self.code_action_ids.append(iden)
