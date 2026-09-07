@@ -32,7 +32,9 @@ Technical details:
 - `CodeActionOptions` and `ExecuteCommandOptions` are merged during
   `initialize`; subsequent `textDocument/codeAction` requests are sent to all
   servers supporting code actions, the proxy waits until all the servers return
-  results, and the results are merged into a single result passed to the client
+  results, and the results are merged into a single result passed to the client.
+  `codeAction/resolve` requests are dispatched to the server that returned the
+  code action being resolved
 
 Usage
 -----

@@ -21,7 +21,7 @@ preserved_requests = [
     'textDocument/formatting', 'textDocument/rangeFormatting',
     'textDocument/completion', 'completionItem/resolve',
     'textDocument/signatureHelp',
-    'textDocument/codeAction',
+    'textDocument/codeAction', 'codeAction/resolve',
     'workspace/executeCommand'
 ]
 preserved_notifications = [
@@ -126,6 +126,12 @@ class Server(ABC):
         if capabilities:
             return safe_get(capabilities, 'codeActionProvider')
         return None
+
+    def get_code_action_resolve_capability(self):
+        provider = self.get_code_action_capability()
+        # resolveProvider exists only in the CodeActionOptions form of the
+        # capability, not when codeActionProvider is just a boolean
+        return isinstance(provider, dict) and bool(safe_get(provider, 'resolveProvider'))
 
     def get_execute_command_capability(self, command):
         capabilities = self._get_capabilities()
@@ -331,6 +337,37 @@ class Proxy:
         return self.get_server_generic(lambda srv: srv.use_execute_command,
             lambda srv: srv.get_execute_command_capability(command))
 
+    # The 'data' field of a CodeAction is preserved by the client between
+    # textDocument/codeAction and codeAction/resolve. The proxy uses it to
+    # remember which server returned the action so codeAction/resolve can be
+    # dispatched to that server (the original 'data' is kept inside the tag).
+    def tag_code_actions(self, actions, srv):
+        for action in actions:
+            # skip Command literals which cannot be resolved (and have 'command'
+            # as a string unlike CodeAction where it is an object)
+            if isinstance(action, dict) and not isinstance(safe_get(action, 'command'), str):
+                tag = {'server': self.servers.index(srv)}
+                if 'data' in action:
+                    tag['data'] = action['data']
+                action['data'] = {proxy_name: tag}
+
+    def untag_code_action(self, action):
+        # returns the originating server and a copy of the action with the
+        # original 'data' restored, or (None, None) when the action isn't tagged
+        data = safe_get(action, 'data') if isinstance(action, dict) else None
+        tag = safe_get(data, proxy_name) if isinstance(data, dict) else None
+        if not isinstance(tag, dict):
+            return None, None
+        index = safe_get(tag, 'server')
+        if not isinstance(index, int) or not 0 <= index < len(self.servers):
+            return None, None
+        action = copy.copy(action)
+        if 'data' in tag:
+            action['data'] = tag['data']
+        else:
+            del action['data']
+        return self.servers[index], action
+
     def get_initialization_options(self):
         msg = copy.deepcopy(self.get_primary().initialize_msg)
         result = msg['result']
@@ -378,6 +415,8 @@ class Proxy:
         if supports_code_action:
             capabilities['codeActionProvider'] = {}
             capabilities['codeActionProvider']['codeActionKinds'] = list(set(code_action_kinds))
+            if any(srv.get_code_action_resolve_capability() for srv in self.servers):
+                capabilities['codeActionProvider']['resolveProvider'] = True
 
         if len(commands) > 0:
             capabilities['executeCommandProvider'] = {}
@@ -452,10 +491,13 @@ class Proxy:
                         msg['result'] = []
                         result = msg['result']
                         for s in self.servers:
-                            srv_result = s.received_code_actions[iden]
+                            srv_result = s.received_code_actions.pop(iden, None)
                             if srv_result:
+                                if s.get_code_action_resolve_capability():
+                                    self.tag_code_actions(srv_result, s)
                                 result += srv_result
-                                del s.received_code_actions[iden]
+                elif not is_error and method == 'codeAction/resolve':
+                    self.tag_code_actions([msg['result']], srv)
         else:
             if method == 'initialize':
                 self.initialize_id = iden
@@ -483,11 +525,19 @@ class Proxy:
             elif method == 'textDocument/signatureHelp':
                 if srv != self.get_signature_server():
                     should_send = False
-            elif method in ['textDocument/codeAction', 'codeAction/resolve']:
+            elif method == 'textDocument/codeAction':
                 if not srv.get_code_action_capability():
                     should_send = False
                 if should_send:
                     self.code_action_ids.append(iden)
+            elif method == 'codeAction/resolve':
+                target, action = self.untag_code_action(safe_get(msg, 'params'))
+                if action is None or srv != target:
+                    should_send = False
+                else:
+                    # the message object is shared by all servers - send a copy
+                    # with the server's original 'data' restored
+                    msg = {**msg, 'params': action}
             elif method == 'workspace/executeCommand':
                 if not is_error:
                     cmd = safe_get(msg['params'], 'command')
@@ -531,18 +581,30 @@ class Proxy:
             # to the client
             if not req_reply_sent:
                 method = msg["method"]
-                err_msg = f'Method {method} not implemented by {proxy_name}'
-                resp_error = {
-                    'jsonrpc': '2.0',
-                    'id': msg['id'],
-                    'error': {
-                        'code': -32601,  # MethodNotFound
-                        'message': err_msg
+                if method == 'codeAction/resolve':
+                    # untagged action from a server without resolve support (some
+                    # clients resolve every action) - nothing to resolve, return
+                    # the action unchanged which is a valid resolve result
+                    resp = {
+                        'jsonrpc': '2.0',
+                        'id': msg['id'],
+                        'result': safe_get(msg, 'params')
                     }
-                }
+                    log_suffix = ''
+                else:
+                    err_msg = f'Method {method} not implemented by {proxy_name}'
+                    resp = {
+                        'jsonrpc': '2.0',
+                        'id': msg['id'],
+                        'error': {
+                            'code': -32601,  # MethodNotFound
+                            'message': err_msg
+                        }
+                    }
+                    log_suffix = ' (error response)'
                 log(f'    C --> S {method} <{proxy_name}>')
-                log(f'    C <-- S {method} <{proxy_name}> (error response)')
-                stdout_writer.write(self.construct_message(resp_error))
+                log(f'    C <-- S {method} <{proxy_name}>{log_suffix}')
+                stdout_writer.write(self.construct_message(resp))
                 await stdout_writer.drain()
 
     def any_connected(self):
