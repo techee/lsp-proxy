@@ -25,9 +25,12 @@ preserved_requests = [
     'workspace/executeCommand'
 ]
 preserved_notifications = [
-    'initialized', 'exit',
-    'textDocument/didOpen', 'textDocument/didChange', 'textDocument/didSave', 'textDocument/didClose',
-    'workspace/didChangeWorkspaceFolders', 'workspace/didChangeConfiguration'
+    'initialized', 'exit', '$/cancelRequest', '$/setTrace',
+    'window/workDoneProgress/cancel',
+    'textDocument/didOpen', 'textDocument/didChange', 'textDocument/willSave',
+    'textDocument/didSave', 'textDocument/didClose',
+    'workspace/didChangeWorkspaceFolders', 'workspace/didChangeConfiguration',
+    'workspace/didChangeWatchedFiles'
 ]
 proxy_name = 'lsp-proxy'
 
@@ -480,9 +483,6 @@ class Proxy:
                     self.server_requests[proxy_id] = (srv, iden, method)
                     msg = copy.copy(msg)
                     msg['id'] = proxy_id
-                else:
-                    # store request id's so we know the method when responses arrive
-                    srv.pending_client_server_requests[iden] = method
 
         if from_server:
             if 'method' not in msg and 'id' in msg:  # response to client's request
@@ -501,21 +501,30 @@ class Proxy:
                     should_send = self.all_shutdown()
                     if should_send:
                         srv_name = proxy_name
-                elif not is_error and iden in self.code_action_ids:
+                elif iden in self.code_action_ids:
                     self.code_action_ids.remove(iden)
-                    srv.received_code_actions[iden] = msg['result']
+                    # None marks an error response (e.g. after cancellation)
+                    srv.received_code_actions[iden] = None if is_error else (msg['result'] or [])
                     # send when the last request returned response
                     should_send = iden not in self.code_action_ids
                     if should_send:
                         srv_name = proxy_name
-                        msg['result'] = []
-                        result = msg['result']
+                        result = []
+                        any_success = False
                         for s in self.servers:
-                            srv_result = s.received_code_actions.pop(iden, None)
-                            if srv_result:
-                                if s.get_code_action_resolve_capability():
-                                    self.tag_code_actions(srv_result, s)
-                                result += srv_result
+                            if iden not in s.received_code_actions:
+                                continue
+                            srv_result = s.received_code_actions.pop(iden)
+                            if srv_result is None:
+                                continue
+                            any_success = True
+                            if s.get_code_action_resolve_capability():
+                                self.tag_code_actions(srv_result, s)
+                            result += srv_result
+                        # when all servers failed, the last error response is
+                        # forwarded as is
+                        if any_success:
+                            msg = {'jsonrpc': '2.0', 'id': iden, 'result': result}
                 elif not is_error and method == 'codeAction/resolve':
                     self.tag_code_actions([msg['result']], srv)
         else:
@@ -576,9 +585,17 @@ class Proxy:
                     cmd = safe_get(msg['params'], 'command')
                     if cmd and srv != self.get_command_server(cmd):
                         should_send = False
+            elif method == '$/cancelRequest':
+                # only servers that received the request and haven't responded yet
+                if safe_get(safe_get(msg, 'params'), 'id') not in srv.pending_client_server_requests:
+                    should_send = False
 
         if should_send:
             method_str = method if method else "no method"
+            if not from_server and is_request:
+                # remember requests sent to this server so we know the method when
+                # the response arrives and which servers to send cancellations to
+                srv.pending_client_server_requests[iden] = method
             if from_server:
                 if method == 'textDocument/publishDiagnostics' and not is_error:
                     uri = msg['params']['uri']

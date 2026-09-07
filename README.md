@@ -13,7 +13,8 @@ Technical details:
   responses are returned back to the client. The primary server serves as the
   main server for all LSP features
 - other servers receive only basic lifecycle and document synchronization
-  messages. These allow the non-primary servers to send correct
+  messages (plus `workspace/didChangeWatchedFiles` and cancellation
+  notifications). These allow the non-primary servers to send correct
   `textDocument/publishDiagnostics` notifications which are all merged and
   sent back to the client. This means that non-primary servers can serve as
   linters or error checkers
