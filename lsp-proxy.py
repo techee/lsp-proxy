@@ -77,7 +77,6 @@ async def read_message(srv, stream):
 class Server(ABC):
     def __init__(self, is_primary):
         self.pending_client_server_requests = {}
-        self.pending_server_client_requests = {}
         self.is_primary = is_primary
         self.initialize_msg = None
         self.shutdown_received = False
@@ -283,6 +282,10 @@ class Proxy:
         self.initialize_id = -1
         self.shutdown_id = -1
         self.code_action_ids = []
+        # requests sent by servers to the client: unique id assigned by the proxy
+        # -> (server, original id, method)
+        self.server_requests = {}
+        self.next_server_request_id = 1
 
     def all_initialized(self):
         return all([srv.initialize_msg for srv in self.servers])
@@ -435,34 +438,48 @@ class Proxy:
     async def process(self, srv, writer, msg, from_server, preserved_methods):
         method = safe_get(msg, 'method')
         iden = safe_get(msg, 'id')
+        # 0 is a valid id so these must not rely on truthiness of the id
+        is_request = method is not None and iden is not None
+        is_response = method is None and iden is not None
         is_error = safe_get(msg, 'error') is not None
         srv_name = srv.get_name()
 
         should_send = False
 
-        if from_server:
-            pending = srv.pending_client_server_requests
-        else:
-            pending = srv.pending_server_client_requests
-
-        if iden in pending:
-            # this is a response to request whose id we already have in pending so
-            # this should be sent
-            should_send = True
-            # update method name based on what we previously assigned to the id
-            method = pending[iden]
-            del pending[iden]
+        if is_response:
+            if from_server:
+                # response to a request from the client - always sent (possibly
+                # merged with responses of other servers below)
+                should_send = True
+                # update method name based on what we previously assigned to the id
+                method = srv.pending_client_server_requests.pop(iden, None)
+            else:
+                # response to a request from a server - only the server that sent
+                # the request receives it, with the original id restored
+                request = self.server_requests.get(iden)
+                if request and request[0] is srv:
+                    del self.server_requests[iden]
+                    should_send = True
+                    method = request[2]
+                    msg = copy.copy(msg)
+                    msg['id'] = request[1]
         elif not self.filter_msg(method, srv.is_primary, preserved_methods, from_server):
             # this is a request or notification that hasn't been filtered and should
             # be sent
             should_send = True
-            if method and iden:
+            if is_request:
                 if from_server:
-                    pending = srv.pending_server_client_requests
+                    # different servers may use the same request ids - replace the
+                    # id with one unique across all servers and remember where the
+                    # request came from so the client's response can be routed back
+                    proxy_id = self.next_server_request_id
+                    self.next_server_request_id += 1
+                    self.server_requests[proxy_id] = (srv, iden, method)
+                    msg = copy.copy(msg)
+                    msg['id'] = proxy_id
                 else:
-                    pending = srv.pending_client_server_requests
-                # store request id's into pending so we send them when responses arrive
-                pending[iden] = method
+                    # store request id's so we know the method when responses arrive
+                    srv.pending_client_server_requests[iden] = method
 
         if from_server:
             if 'method' not in msg and 'id' in msg:  # response to client's request
@@ -537,7 +554,8 @@ class Proxy:
                 else:
                     # the message object is shared by all servers - send a copy
                     # with the server's original 'data' restored
-                    msg = {**msg, 'params': action}
+                    msg = copy.copy(msg)
+                    msg['params'] = action
             elif method == 'workspace/executeCommand':
                 if not is_error:
                     cmd = safe_get(msg['params'], 'command')
@@ -559,7 +577,8 @@ class Proxy:
             writer.write(self.construct_message(msg))
             await writer.drain()
 
-        return should_send or not (method and iden)
+        # only requests need a reply
+        return should_send or not is_request
 
     async def dispatch(self, msg, stdout_writer, server):
         from_server = server is not None
@@ -569,6 +588,9 @@ class Proxy:
             # if reply was sent
             await self.process(server, stdout_writer, msg, from_server, [])
         else:
+            if 'method' not in msg and 'id' in msg and msg['id'] not in self.server_requests:
+                log(f'    C --> S response to unknown request id {msg["id"]} dropped <{proxy_name}>')
+
             req_reply_sent = False
 
             for srv in self.servers:
