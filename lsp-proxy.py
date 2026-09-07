@@ -7,8 +7,10 @@ import argparse
 import asyncio
 import copy
 import json
+import os
 import signal
 import sys
+import threading
 from abc import ABC, abstractmethod
 
 
@@ -241,6 +243,32 @@ class SocketServer(Server):
 
     def get_name(self):
         return f'{self._host}:{self._port}'
+
+
+class StdoutWriter:
+    # Minimal asyncio.StreamWriter replacement exposing just the write()/drain()
+    # methods used by the proxy. Unlike loop.connect_write_pipe(), writing to
+    # sys.stdout.buffer works the same on all platforms (using the binary buffer
+    # also avoids newline translation that would corrupt the framing on Windows).
+    def __init__(self, loop):
+        self._loop = loop
+        self._stdout = sys.stdout.buffer
+        self._buffer = bytearray()
+
+    def write(self, data):
+        # only buffer in memory here so this never blocks the event loop
+        self._buffer += data
+
+    async def drain(self):
+        data = bytes(self._buffer)
+        self._buffer.clear()
+        # the actual (potentially blocking) write to the pipe happens in a
+        # thread so a slow client cannot stall the event loop
+        await self._loop.run_in_executor(None, self._flush, data)
+
+    def _flush(self, data):
+        self._stdout.write(data)
+        self._stdout.flush()
 
 
 class Proxy:
@@ -527,14 +555,31 @@ class Proxy:
         for srv in self.servers:
             srv.disconnect()
 
+    # loop.connect_read_pipe()/connect_write_pipe() don't work with stdin/stdout
+    # on Windows and require the non-public asyncio.streams.FlowControlMixin.
+    # Instead we read stdin in a background thread feeding an asyncio.StreamReader
+    # and write stdout through StdoutWriter, which behaves the same everywhere.
     # see https://stackoverflow.com/questions/64303607/python-asyncio-how-to-read-stdin-and-write-to-stdout
     async def connect_stdin_stdout(self):
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         reader = asyncio.StreamReader()
-        protocol = asyncio.StreamReaderProtocol(reader)
-        await loop.connect_read_pipe(lambda: protocol, sys.stdin)
-        w_transport, w_protocol = await loop.connect_write_pipe(asyncio.streams.FlowControlMixin, sys.stdout)
-        writer = asyncio.StreamWriter(w_transport, w_protocol, reader, loop)
+
+        def read_stdin():
+            while True:
+                # os.read() returns as soon as some data is available instead of
+                # blocking until the full requested size has been read. It is
+                # used instead of sys.stdin.buffer.read1() because the buffered
+                # reader's lock would be held by this thread while blocked, which
+                # makes the interpreter abort at shutdown when it finalizes stdin
+                data = os.read(sys.stdin.fileno(), 2 ** 16)
+                if not data:  # EOF, client closed its end
+                    loop.call_soon_threadsafe(reader.feed_eof)
+                    break
+                loop.call_soon_threadsafe(reader.feed_data, data)
+
+        threading.Thread(target=read_stdin, daemon=True).start()
+
+        writer = StdoutWriter(loop)
         return reader, writer
 
     async def main_loop(self):
